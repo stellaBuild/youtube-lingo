@@ -337,6 +337,12 @@ body {
   border-bottom: none;
 }
 
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .transcript-section-header {
   align-items: center;
   flex-direction: row;
@@ -1359,6 +1365,94 @@ body {
   padding: 16px;
   border-radius: var(--r-sm);
   background: var(--accent-dim);
+}
+
+/* ============================================================
+   EXPORT DIALOG
+   Reuses .explain-modal-overlay/.explain-modal for the shell, matching
+   the Explain modal's look and close behavior.
+   ============================================================ */
+.export-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.export-field-label {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.export-option-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-raised);
+  border-radius: var(--r-pill);
+}
+
+.export-option-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+}
+
+.export-option-btn:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.export-option-btn:focus-visible {
+  outline: 3px solid var(--accent-hover);
+  outline-offset: 2px;
+}
+
+.export-option-btn.active {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 2px 6px rgba(200, 103, 79, 0.3);
+}
+
+.export-option-btn.active:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: white;
+}
+
+.export-option-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-dialog-message {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--accent);
+  min-height: 16px;
+}
+
+.export-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.export-dialog-submit {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.export-dialog-submit:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 /* ============================================================

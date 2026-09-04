@@ -233,20 +233,25 @@
           <div class="section">
             <div class="section-header">
               <div class="section-title">Saved Notes</div>
-              <div class="notes-filter">
-                <button
-                  class="enhance-btn active"
-                  id="notesFilterThis"
-                  aria-pressed="true"
-                >
-                  This Video
-                </button>
-                <button
-                  class="enhance-btn"
-                  id="notesFilterAll"
-                  aria-pressed="false"
-                >
-                  All Notes
+              <div class="section-header-actions">
+                <div class="notes-filter">
+                  <button
+                    class="enhance-btn active"
+                    id="notesFilterThis"
+                    aria-pressed="true"
+                  >
+                    This Video
+                  </button>
+                  <button
+                    class="enhance-btn"
+                    id="notesFilterAll"
+                    aria-pressed="false"
+                  >
+                    All Notes
+                  </button>
+                </div>
+                <button class="enhance-btn" id="notesExportBtn" type="button">
+                  Export
                 </button>
               </div>
             </div>
@@ -263,6 +268,9 @@
           <div class="section">
             <div class="section-header">
               <div class="section-title">Vocabulary Notebook</div>
+              <button class="enhance-btn" id="vocabularyExportBtn" type="button">
+                Export
+              </button>
             </div>
             <p class="notes-intro" id="vocabularyIntro">
               Select a word or phrase in the transcript and click Vocabulary

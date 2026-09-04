@@ -463,6 +463,14 @@ function setupEventListeners() {
     setNotesFilter(true);
     loadNotes(null); // Load all notes
   });
+
+  // Export buttons
+  document
+    .getElementById("notesExportBtn")
+    ?.addEventListener("click", () => openExportDialog("notes"));
+  document
+    .getElementById("vocabularyExportBtn")
+    ?.addEventListener("click", () => openExportDialog("vocabulary"));
 }
 
 function setNotesFilter(showAll) {
@@ -1705,8 +1713,8 @@ async function copyToClipboardWithFeedback(text, buttonId) {
   }
 }
 
-function downloadTextFile(text, filename) {
-  const blob = new Blob([text], { type: "text/plain" });
+function downloadFile(text, filename, mimeType = "text/plain") {
+  const blob = new Blob([text], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -1715,12 +1723,353 @@ function downloadTextFile(text, filename) {
   URL.revokeObjectURL(url);
 }
 
+function downloadTextFile(text, filename) {
+  downloadFile(text, filename, "text/plain");
+}
+
 function sanitizeFilename(str) {
   return (str || "untitled")
     .replace(/[^\w\s-]/g, "")
     .replace(/\s+/g, "-")
     .substring(0, 50)
     .toLowerCase();
+}
+
+// ============================================================
+// VOCABULARY / NOTES EXPORT
+// ============================================================
+// Read-only export on top of existing storage: no change to how notes or
+// vocabulary entries are saved, displayed, or stored.
+
+const EXPORT_FORMAT_OPTIONS = {
+  vocabulary: [
+    { value: "csv", label: "CSV" },
+    { value: "markdown", label: "Markdown" },
+    { value: "anki", label: "Anki" },
+  ],
+  notes: [
+    { value: "csv", label: "CSV" },
+    { value: "markdown", label: "Markdown" },
+  ],
+};
+
+const EXPORT_DIALOG_TITLES = {
+  vocabulary: "Export Vocabulary",
+  notes: "Export Notes",
+};
+
+function formatExportDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatExportDateTime(ms) {
+  const date = new Date(Number(ms) || 0);
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${formatExportDate(date)} ${hours}:${minutes}`;
+}
+
+function csvField(value) {
+  const str = value === undefined || value === null ? "" : String(value);
+  if (/["\n,]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function buildCsv(headers, rows) {
+  const lines = [headers.map(csvField).join(",")];
+  rows.forEach((row) => lines.push(row.map(csvField).join(",")));
+  return lines.join("\r\n");
+}
+
+function buildVocabularyCsv(entries) {
+  const headers = [
+    "word",
+    "meaning",
+    "contextSentence",
+    "videoTitle",
+    "timestamp",
+    "videoUrl",
+    "dateSaved",
+  ];
+  const rows = entries.map((entry) => [
+    entry.word,
+    entry.meaning,
+    entry.contextSentence,
+    entry.videoTitle,
+    entry.timestamp,
+    entry.videoUrl,
+    formatExportDateTime(entry.dateSaved),
+  ]);
+  return buildCsv(headers, rows);
+}
+
+function buildNotesCsv(entries) {
+  const headers = ["text", "videoTitle", "timestamp", "timestampedUrl", "createdAt"];
+  const rows = entries.map((note) => [
+    note.text,
+    note.videoTitle,
+    note.timestamp,
+    note.timestampedUrl,
+    formatExportDateTime(note.createdAt),
+  ]);
+  return buildCsv(headers, rows);
+}
+
+/**
+ * Collapses embedded line breaks so a value stays on one line inside a
+ * Markdown heading or bullet. Saved meanings/sentences can contain raw
+ * newlines (nothing upstream strips them), which would otherwise break out
+ * of the bullet or heading they're embedded in.
+ */
+function mdInline(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildVocabularyMarkdown(entries, scopeLabel) {
+  let md = `# Vocabulary Export\n\n`;
+  md += `${entries.length} ${entries.length === 1 ? "entry" : "entries"}, ${scopeLabel}.\n\n`;
+  md += `---\n\n`;
+  entries.forEach((entry) => {
+    md += `## ${mdInline(entry.word)}\n\n`;
+    md += `- **Meaning:** ${mdInline(entry.meaning)}\n`;
+    md += `- **Context:** "${mdInline(entry.contextSentence)}"\n`;
+    md += `- **Video:** [${mdInline(entry.videoTitle) || "Unknown"}](${entry.videoUrl})\n`;
+    md += `- **Timestamp:** ${entry.timestamp}\n`;
+    md += `- **Saved:** ${formatExportDateTime(entry.dateSaved)}\n\n`;
+  });
+  md += `Exported by YouTube Digest\n`;
+  return md;
+}
+
+function buildNotesMarkdown(entries, scopeLabel) {
+  let md = `# Notes Export\n\n`;
+  md += `${entries.length} ${entries.length === 1 ? "note" : "notes"}, ${scopeLabel}.\n\n`;
+  md += `---\n\n`;
+  entries.forEach((note) => {
+    md += `## ${note.timestamp} - ${mdInline(note.videoTitle) || "Unknown"}\n\n`;
+    md += `${note.text}\n\n`;
+    md += `- **Video:** [${mdInline(note.videoTitle) || "Unknown"}](${note.timestampedUrl})\n`;
+    md += `- **Saved:** ${formatExportDateTime(note.createdAt)}\n\n`;
+  });
+  md += `Exported by YouTube Digest\n`;
+  return md;
+}
+
+function buildVocabularyAnki(entries) {
+  const sanitizeField = (value) =>
+    String(value || "")
+      .replace(/[\t\r\n]+/g, " ")
+      .trim();
+  const lines = entries.map((entry) =>
+    [entry.word, entry.meaning, entry.contextSentence]
+      .map(sanitizeField)
+      .join("\t"),
+  );
+  return lines.join("\r\n");
+}
+
+function buildExportContent(kind, format, entries, scopeLabel) {
+  if (kind === "vocabulary") {
+    if (format === "csv") return buildVocabularyCsv(entries);
+    if (format === "markdown") return buildVocabularyMarkdown(entries, scopeLabel);
+    return buildVocabularyAnki(entries);
+  }
+  if (format === "csv") return buildNotesCsv(entries);
+  return buildNotesMarkdown(entries, scopeLabel);
+}
+
+function buildExportFilename(kind, format, scope, videoTitle) {
+  const ext = format === "csv" ? "csv" : format === "markdown" ? "md" : "txt";
+  const dateStr = formatExportDate(new Date());
+  if (scope === "current") {
+    return `${kind}-${sanitizeFilename(videoTitle)}-${dateStr}.${ext}`;
+  }
+  return `${kind}-export-${dateStr}.${ext}`;
+}
+
+/**
+ * Fetches entries fresh from storage for export, independent of whatever
+ * filter the Notes tab currently has applied on screen.
+ */
+async function fetchExportEntries(kind, scope) {
+  const videoId = scope === "current" ? currentVideoId : undefined;
+  if (kind === "vocabulary") {
+    const result = await chrome.runtime.sendMessage({
+      action: "getVocabulary",
+      videoId,
+    });
+    return result?.success ? result.entries || [] : [];
+  }
+  const result = await chrome.runtime.sendMessage({
+    action: "getNotes",
+    videoId,
+  });
+  return result?.success ? result.notes || [] : [];
+}
+
+function handleExportDialogKeydown(event) {
+  if (event.key === "Escape") closeExportDialog();
+}
+
+function closeExportDialog() {
+  document.getElementById("exportDialog")?.remove();
+  document.removeEventListener("keydown", handleExportDialogKeydown);
+}
+
+function setExportDialogMessage(text) {
+  const messageEl = document.getElementById("exportDialogMessage");
+  if (messageEl) messageEl.textContent = text || "";
+}
+
+async function handleExportSubmit(kind, format, scope) {
+  if (!format || !scope) return;
+
+  const submitBtn = document.getElementById("exportDialogSubmit");
+  const originalLabel = submitBtn?.textContent;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Exporting...";
+  }
+  setExportDialogMessage("");
+
+  try {
+    const entries = await fetchExportEntries(kind, scope);
+
+    if (!entries.length) {
+      setExportDialogMessage(
+        scope === "current"
+          ? "No entries for the current video."
+          : "No entries to export yet.",
+      );
+      return;
+    }
+
+    const scopeLabel = scope === "current" ? "current video" : "all videos";
+    const content = buildExportContent(kind, format, entries, scopeLabel);
+    const mimeType =
+      format === "csv" ? "text/csv" : format === "markdown" ? "text/markdown" : "text/plain";
+    const filename = buildExportFilename(
+      kind,
+      format,
+      scope,
+      scope === "current" ? currentVideoTitle : "",
+    );
+
+    downloadFile(content, filename, mimeType);
+    closeExportDialog();
+  } catch (error) {
+    console.error("[YouTube Digest] Export error:", error);
+    setExportDialogMessage("Export failed. Please try again.");
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
+    }
+  }
+}
+
+/**
+ * Opens the Export dialog for the Vocabulary or Notes tab. Mirrors the
+ * Explain modal's shell (showExplanation()) for a consistent look and
+ * close behavior (overlay click, Close button, Escape).
+ */
+function openExportDialog(kind) {
+  closeExportDialog();
+
+  const formatOptions = EXPORT_FORMAT_OPTIONS[kind];
+  const hasCurrentVideo = Boolean(currentVideoId);
+
+  const modal = document.createElement("div");
+  modal.id = "exportDialog";
+  modal.className = "explain-modal-overlay";
+  modal.innerHTML = `
+    <div class="explain-modal">
+      <div class="explain-modal-header">
+        <div class="explain-modal-title">${escapeHtml(EXPORT_DIALOG_TITLES[kind])}</div>
+        <button class="explain-modal-close" id="closeExportDialog">Close</button>
+      </div>
+      <div class="explain-modal-content export-dialog-content">
+        <div class="export-field">
+          <div class="export-field-label">Format</div>
+          <div class="export-option-group" id="exportFormatGroup" role="group" aria-label="Export format">
+            ${formatOptions
+              .map(
+                (option, index) => `
+              <button
+                class="enhance-btn export-option-btn${index === 0 ? " active" : ""}"
+                type="button"
+                data-format="${option.value}"
+                aria-pressed="${index === 0 ? "true" : "false"}"
+              >${escapeHtml(option.label)}</button>`,
+              )
+              .join("")}
+          </div>
+        </div>
+        <div class="export-field">
+          <div class="export-field-label">Scope</div>
+          <div class="export-option-group" id="exportScopeGroup" role="group" aria-label="Export scope">
+            <button
+              class="enhance-btn export-option-btn${hasCurrentVideo ? " active" : ""}"
+              type="button"
+              data-scope="current"
+              aria-pressed="${hasCurrentVideo ? "true" : "false"}"
+              ${hasCurrentVideo ? "" : "disabled"}
+              title="${hasCurrentVideo ? "" : "Open a video to use this option"}"
+            >Export current video only</button>
+            <button
+              class="enhance-btn export-option-btn${hasCurrentVideo ? "" : " active"}"
+              type="button"
+              data-scope="all"
+              aria-pressed="${hasCurrentVideo ? "false" : "true"}"
+            >Export everything</button>
+          </div>
+        </div>
+        <div class="export-dialog-message" id="exportDialogMessage" role="status" aria-live="polite"></div>
+      </div>
+      <div class="export-dialog-footer">
+        <button class="enhance-btn export-dialog-submit" id="exportDialogSubmit" type="button">Export</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const formatGroup = document.getElementById("exportFormatGroup");
+  const scopeGroup = document.getElementById("exportScopeGroup");
+
+  const wireToggleGroup = (group) => {
+    group.addEventListener("click", (event) => {
+      const btn = event.target.closest(".export-option-btn");
+      if (!btn || btn.disabled) return;
+      group.querySelectorAll(".export-option-btn").forEach((b) => {
+        b.classList.toggle("active", b === btn);
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
+    });
+  };
+  wireToggleGroup(formatGroup);
+  wireToggleGroup(scopeGroup);
+
+  document
+    .getElementById("closeExportDialog")
+    .addEventListener("click", closeExportDialog);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeExportDialog();
+  });
+  document.addEventListener("keydown", handleExportDialogKeydown);
+
+  document.getElementById("exportDialogSubmit").addEventListener("click", () => {
+    const format = formatGroup.querySelector(".export-option-btn.active")?.dataset.format;
+    const scope = scopeGroup.querySelector(".export-option-btn.active")?.dataset.scope;
+    void handleExportSubmit(kind, format, scope);
+  });
 }
 
 // ============================================================
