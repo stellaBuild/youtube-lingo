@@ -34,7 +34,7 @@ let errorAction = null;
 // aligned bilingual view across Transcript, Overview, and Notes.
 let currentTranscriptMode = "original";
 const DISPLAY_LANGUAGE_MODE_KEY = "ytd_display_language_modes_by_video";
-const DISPLAY_LANGUAGE_MODES = new Set(["original", "zh", "bilingual"]);
+const DISPLAY_LANGUAGE_MODES = new Set(["original", "zh", "bilingual", "fr"]);
 let translationGeneration = 0; // Invalidates responses from older UI modes/videos.
 let translationWorkCount = 0;
 let transcriptScrollObserver = null;
@@ -728,7 +728,11 @@ function renderLocalizedContent(text, surface, id) {
   if (!original) return "";
   const cacheKey = interfaceTranslationCacheKey(surface, id, original);
   const translated = getInterfaceTranslation(surface, id, original);
-  if (currentTranscriptMode === "original") return escapeHtml(original);
+  // The French/English tab only translates the Transcript tab — Overview and
+  // Notes stay in their original language, same as Original mode.
+  if (currentTranscriptMode === "original" || currentTranscriptMode === "fr") {
+    return escapeHtml(original);
+  }
 
   const translation = translated
     ? escapeHtml(translated)
@@ -752,7 +756,12 @@ function getLocalizedPlainText(text, surface, id) {
 }
 
 async function translateInterfaceSegments(surface, segments, rerender) {
-  if (currentTranscriptMode === "original" || !segments.length) return;
+  if (
+    currentTranscriptMode === "original" ||
+    currentTranscriptMode === "fr" ||
+    !segments.length
+  )
+    return;
   const generation = translationGeneration;
   const videoId = currentVideoId;
   const missing = segments
@@ -1334,6 +1343,9 @@ function setupTranscriptSearch() {
 
 function getDisplayedTranscriptText() {
   if (currentTranscriptMode === "original") return currentTranscriptText || "";
+  if (currentTranscriptMode === "fr" && !isFrenchTranscriptLanguage()) {
+    return currentTranscriptText || "";
+  }
   return getActiveTranscriptSegments()
     .map((segment) => {
       const translated = transcriptParagraphCache.get(
@@ -2552,8 +2564,36 @@ function getActiveTranscriptSegments() {
   return groupTranscriptEntries(currentTranscript || []);
 }
 
+/**
+ * True for a French language code, including regional variants like "fr-FR".
+ */
+function isFrenchLanguageCode(languageCode) {
+  return /^fr(-|$)/i.test(String(languageCode || ""));
+}
+
+/**
+ * True when Supadata reported the transcript's source language as French.
+ * Only the Bilingual FR/EN tab checks this — every other mode translates
+ * from whatever language the video actually is.
+ */
+function isFrenchTranscriptLanguage() {
+  return isFrenchLanguageCode(currentTranscriptLanguage);
+}
+
+/**
+ * The language each display mode translates transcript segments INTO.
+ * "fr" is the Bilingual FR/EN tab: it shows French captions aligned with an
+ * English translation, so its output language is English, not French.
+ */
+function translationTargetLanguageForMode(mode) {
+  if (mode === "zh" || mode === "bilingual") return "zh";
+  if (mode === "fr") return "en";
+  return null;
+}
+
 function transcriptTranslationCacheKey(segment) {
-  return `${currentVideoId}:zh:semantic:${segment.id}`;
+  const lang = translationTargetLanguageForMode(currentTranscriptMode) || "zh";
+  return `${currentVideoId}:${lang}:semantic:${segment.id}`;
 }
 
 function setTranscriptModeButtons(mode) {
@@ -2613,7 +2653,7 @@ function renderTranscriptSegmentContent(segment, mode, translated, error) {
     translationHtml = "Waiting for translation…";
   }
 
-  if (mode === "bilingual") {
+  if (mode === "bilingual" || mode === "fr") {
     return `<span class="transcript-copy"><span class="transcript-original">${original}</span><span class="transcript-translation ${translated ? "" : error ? "translation-error" : "translation-pending"}">${translationHtml}</span></span>`;
   }
 
@@ -2745,7 +2785,7 @@ async function requestTranscriptTranslationBatch(
         segments: sourceBatch.map(({ id, text }) => ({ id, text })),
       },
       contentType: "transcriptBatch",
-      targetLanguage: "zh",
+      targetLanguage: translationTargetLanguageForMode(mode),
       videoTitle: currentVideoTitle,
     });
 
@@ -2806,10 +2846,37 @@ function retryTranslationSegment(index, generation) {
 }
 
 /**
+ * Replaces the transcript list with a plain status message. Used for the
+ * Bilingual FR/EN tab when the video's captions aren't French — showing this
+ * instead of attempting a translation avoids spending tokens on a mismatch.
+ */
+function renderTranscriptUnavailableMessage(message) {
+  if (transcriptScrollObserver) {
+    transcriptScrollObserver.disconnect();
+    transcriptScrollObserver = null;
+  }
+  const transcriptList = document.getElementById("transcriptList");
+  if (!transcriptList) return;
+  transcriptList.innerHTML = "";
+  const notice = document.createElement("div");
+  notice.className = "notes-intro";
+  notice.textContent = message;
+  transcriptList.appendChild(notice);
+  refreshTranscriptSearch({ preserveIndex: false, scroll: false });
+}
+
+/**
  * Renders immediately, translates the first small batch, then observes the
  * remaining rows. Batches are sequential so the provider is never flooded.
  */
 async function translateTranscript() {
+  if (currentTranscriptMode === "fr" && !isFrenchTranscriptLanguage()) {
+    renderTranscriptUnavailableMessage(
+      "No French captions available for this video.",
+    );
+    return;
+  }
+
   const segments = getActiveTranscriptSegments();
   if (!segments.length || currentTranscriptMode === "original") return;
 
@@ -2904,4 +2971,6 @@ globalThis.__YTD_TRANSCRIPT_TESTING__ = {
   getNavigationUrl,
   renderSubtitleInlineMarkup,
   renderTranscriptSegmentContent,
+  translationTargetLanguageForMode,
+  isFrenchLanguageCode,
 };

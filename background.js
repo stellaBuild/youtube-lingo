@@ -45,7 +45,10 @@ async function loadPromptSection(fileName, heading, variables = {}) {
     if (!response.ok) {
       throw new Error(`Could not load prompt file: ${fileName}`);
     }
-    markdown = await response.text();
+    // Normalize CRLF to LF: checkouts with core.autocrlf=true (the Git for
+    // Windows default) rewrite these files with CRLF line endings on disk,
+    // and the section/fence parsing below matches literal "\n" boundaries.
+    markdown = (await response.text()).replace(/\r\n/g, "\n");
     promptFileCache.set(fileName, markdown);
   }
 
@@ -1496,28 +1499,38 @@ async function handleExplainSelection(
 }
 
 // ============================================================
-// TRANSLATION — Translate transcript batches into Simplified Chinese
+// TRANSLATION — Simplified Chinese, and English for French captions
 // ============================================================
 // Uses a low temperature for consistent, natural translations.
+
+// Each supported targetLanguage maps to the display name used in prompts and
+// the prompts/translation.md heading holding its language-specific rules.
+// "en" is only reached via the Bilingual FR/EN tab, which always translates
+// French captions into English — its rules heading is named for the source
+// language (French) since that's what makes its guidance distinct.
+const TRANSLATION_TARGETS = {
+  zh: { langName: "Simplified Chinese", rulesHeading: "Chinese rules" },
+  en: { langName: "English", rulesHeading: "French rules" },
+};
 
 /**
  * Shared base rules that every translation prompt includes.
  * These ensure translations sound natural rather than machine-translated.
  *
- * @param {string} targetLanguage - Must be 'zh'
+ * @param {string} targetLanguage - Must be a key of TRANSLATION_TARGETS
  * @returns {Promise<string>} - The base translation rules
  */
 async function getTranslationBaseRules(targetLanguage) {
-  if (targetLanguage !== "zh") {
+  const target = TRANSLATION_TARGETS[targetLanguage];
+  if (!target) {
     throw new Error(`Unsupported translation target: ${targetLanguage}`);
   }
-  const langName = "Simplified Chinese";
   const langSpecific = await loadPromptSection(
     "translation.md",
-    "Chinese rules",
+    target.rulesHeading,
   );
   return loadPromptSection("translation.md", "Shared base rules", {
-    langName,
+    langName: target.langName,
     langSpecific,
   });
 }
@@ -1556,10 +1569,26 @@ function looksLikeChineseTranslation(text, sourceText) {
 }
 
 /**
- * Aligns untrusted model output by exact stable ID. Missing, duplicated,
- * unknown, empty, or clearly non-Chinese values become explicit row errors.
+ * A French->English translation of any real length shouldn't still be full
+ * of French accented characters - that's a sign the model echoed the source
+ * back instead of translating it.
  */
-function normalizeTranslatedSegmentBatch(parsed, sourceSegments) {
+function looksLikeEnglishTranslation(text) {
+  if (text.length < 20) return true;
+  const frenchAccents = (text.match(/[\u00e0\u00e2\u00e4\u00e9\u00e8\u00ea\u00eb\u00ee\u00ef\u00f4\u00f6\u00f9\u00fb\u00fc\u00e7\u0153\u00e6]/gi) || []).length;
+  return frenchAccents / text.length < 0.05;
+}
+
+function looksLikeValidTranslation(text, sourceText, targetLanguage) {
+  if (targetLanguage === "en") return looksLikeEnglishTranslation(text);
+  return looksLikeChineseTranslation(text, sourceText);
+}
+
+/**
+ * Aligns untrusted model output by exact stable ID. Missing, duplicated,
+ * unknown, empty, or clearly wrong-language values become explicit row errors.
+ */
+function normalizeTranslatedSegmentBatch(parsed, sourceSegments, targetLanguage = "zh") {
   const candidates = Array.isArray(parsed?.segments) ? parsed.segments : [];
   const sourceById = new Map(sourceSegments.map((segment) => [segment.id, segment]));
   const translatedById = new Map();
@@ -1575,18 +1604,19 @@ function normalizeTranslatedSegmentBatch(parsed, sourceSegments) {
     }
     const text = candidate.text.trim();
     const source = sourceById.get(candidate.id);
-    if (text && looksLikeChineseTranslation(text, source.text)) {
+    if (text && looksLikeValidTranslation(text, source.text, targetLanguage)) {
       translatedById.set(candidate.id, text);
     }
   });
 
+  const targetName = TRANSLATION_TARGETS[targetLanguage]?.langName || targetLanguage;
   return {
     segments: sourceSegments.map((source) => ({
       id: source.id,
       text: translatedById.get(source.id) || "",
       error: translatedById.has(source.id)
         ? ""
-        : "Missing or invalid Chinese translation",
+        : `Missing or invalid ${targetName} translation`,
     })),
   };
 }
@@ -1595,7 +1625,7 @@ function normalizeTranslatedSegmentBatch(parsed, sourceSegments) {
  * Translates content using DeepSeek.
  * @param {Object} content - JSON object containing semantic transcript segments
  * @param {string} contentType - 'transcriptBatch' or 'interfaceBatch'
- * @param {string} targetLanguage - 'zh' for Simplified Chinese
+ * @param {string} targetLanguage - 'zh' for Simplified Chinese, or 'en' (French captions -> English, Bilingual FR/EN tab only)
  * @param {string} videoTitle - The video title (for context)
  * @returns {Object} - { success, translatedContent } or { success: false, error }
  */
@@ -1606,7 +1636,7 @@ async function handleTranslateContent(
   videoTitle,
 ) {
   try {
-    if (targetLanguage !== "zh") {
+    if (!TRANSLATION_TARGETS[targetLanguage]) {
       return {
         success: false,
         error: `Unsupported translation target: ${String(targetLanguage)}`,
@@ -1625,7 +1655,7 @@ async function handleTranslateContent(
     }
 
     const sourceSegments = validateTranscriptBatchRequest(content);
-    const langName = "Simplified Chinese";
+    const langName = TRANSLATION_TARGETS[targetLanguage].langName;
     const baseRules = await getTranslationBaseRules(targetLanguage);
     const promptSection =
       contentType === "transcriptBatch"
@@ -1663,11 +1693,15 @@ async function handleTranslateContent(
     if (!result.success) return result;
 
     const parsed = parseLooseJson(result.text);
-    const aligned = normalizeTranslatedSegmentBatch(parsed, sourceSegments);
+    const aligned = normalizeTranslatedSegmentBatch(
+      parsed,
+      sourceSegments,
+      targetLanguage,
+    );
     if (!aligned.segments.some((segment) => segment.text)) {
       return {
         success: false,
-        error: "Translation returned no valid Chinese segments",
+        error: `Translation returned no valid ${langName} segments`,
       };
     }
     return { success: true, translatedContent: aligned };

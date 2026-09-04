@@ -1,6 +1,8 @@
 # Translation Prompts
 
-Used in `background.js` when the user requests Simplified Chinese content.
+Used in `background.js` when the user requests Simplified Chinese content, or
+when the Bilingual FR/EN transcript tab translates French captions into
+English.
 
 ## Shared base rules
 
@@ -23,6 +25,20 @@ TRANSLATION RULES (follow strictly):
 - Write for a smart tech/product audience. Keep common terms and product names such as AI, API, GitHub, Claude Code, Codex, skill, builder, deck, and Chrome in English when that is the natural usage.
 - Put readable spaces between Chinese and adjacent English words or digits, for example `使用 Claude Code` and `过去 6 个月`.
 - Remove empty spoken fillers rather than translating them literally, while preserving real uncertainty or emphasis.
+```
+
+## French rules
+
+Used only by the Bilingual FR/EN transcript tab, which always translates
+French captions into English (`{langName}` is "English" for this pass).
+
+```
+- The source text is French. Translate it into clear, natural English — not a literal word-for-word rendering.
+- Resolve French-specific ambiguity correctly: distinguish tu/vous by matching the register in the English translation (formal vs. casual phrasing), and pick the sense that fits context for common false friends (e.g. actuellement = "currently" not "actually", assister = "attend" not "assist", librairie = "bookstore" not "library").
+- Use natural English sentence structures — do NOT mirror French word order or syntax.
+- Translate the complete thought before deciding the final English phrasing; never preserve a broken caption fragment just because the source API split there.
+- Write for a general English-speaking audience. Keep proper nouns, brand names, and product names as they appear in French when that is the natural usage.
+- Remove empty spoken fillers (e.g. "euh", "bah", "du coup" used as a filler) rather than translating them literally, while preserving real uncertainty or emphasis.
 ```
 
 ## Transcript batch translation
@@ -64,7 +80,7 @@ The related video is titled "{videoTitle}". Use the title and neighboring segmen
 
 ## Variables
 
-- `{langName}` — "Simplified Chinese".
+- `{langName}` — "Simplified Chinese", or "English" for the Bilingual FR/EN tab.
 - `{baseRules}` — the shared base rules above.
-- `{langSpecific}` — the Chinese rules inserted into the shared base rules.
+- `{langSpecific}` — the Chinese rules, or the French rules for the Bilingual FR/EN tab, inserted into the shared base rules.
 - `{videoTitle}` — video title.

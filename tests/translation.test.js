@@ -5,7 +5,11 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
-const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+// Normalize CRLF to LF: checkouts with core.autocrlf=true (the Git for
+// Windows default) rewrite these files with CRLF line endings on disk, and
+// several tests below match source text against literal "\n" boundaries.
+const read = (file) =>
+  fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");
 
 function loadSidepanelHelpers({
   sendMessage = () => Promise.resolve({}),
@@ -459,11 +463,21 @@ test("subtitle markup renderer keeps attributed and arbitrary HTML escaped", () 
   assert.doesNotMatch(html, /<img\b|<i\s+onclick|<script\b/);
 });
 
-test("background rejects unsupported language fallthrough and malformed batches", () => {
+test("background rejects unsupported language fallthrough and malformed batches", async () => {
   const source = read("background.js");
-  const { validateTranscriptBatchRequest } = loadBackgroundHelpers();
-  assert.match(source, /targetLanguage !== "zh"/);
+  const { validateTranscriptBatchRequest, handleTranslateContent } =
+    loadBackgroundHelpers();
   assert.match(source, /\["transcriptBatch", "interfaceBatch"\]/);
+
+  const rejected = await handleTranslateContent(
+    { segments: [{ id: "segment-0-0", text: "Hello world." }] },
+    "transcriptBatch",
+    "fr",
+    "Video",
+  );
+  assert.equal(rejected.success, false);
+  assert.match(rejected.error, /Unsupported translation target: fr/);
+
   assert.throws(
     () => validateTranscriptBatchRequest({ segments: [] }),
     /1 to 4 segments/,
@@ -478,6 +492,87 @@ test("background rejects unsupported language fallthrough and malformed batches"
       }),
     /unique and stable/,
   );
+});
+
+test("the header exposes a Bilingual FR/EN tab alongside Original, 中文, and 双语", () => {
+  const html = read("sidepanel.html");
+  const js = read("sidepanel.js");
+  assert.match(html, /data-transcript-mode="fr"[\s\S]*?>Bilingual FR\/EN</);
+  assert.match(js, /DISPLAY_LANGUAGE_MODES = new Set\(\["original", "zh", "bilingual", "fr"\]\)/);
+});
+
+test("the FR/EN mode translates into English, keeping Chinese mode untouched", () => {
+  const { translationTargetLanguageForMode } = loadSidepanelHelpers();
+  assert.equal(translationTargetLanguageForMode("zh"), "zh");
+  assert.equal(translationTargetLanguageForMode("bilingual"), "zh");
+  assert.equal(translationTargetLanguageForMode("fr"), "en");
+  assert.equal(translationTargetLanguageForMode("original"), null);
+});
+
+test("French language detection matches fr and regional variants only", () => {
+  const { isFrenchLanguageCode } = loadSidepanelHelpers();
+  assert.equal(isFrenchLanguageCode("fr"), true);
+  assert.equal(isFrenchLanguageCode("fr-FR"), true);
+  assert.equal(isFrenchLanguageCode("fr-CA"), true);
+  assert.equal(isFrenchLanguageCode("en"), false);
+  assert.equal(isFrenchLanguageCode("frank"), false);
+  assert.equal(isFrenchLanguageCode(null), false);
+});
+
+test("Bilingual FR/EN renders the aligned original/translation layout like bilingual mode", () => {
+  const { renderTranscriptSegmentContent } = loadSidepanelHelpers();
+  const segment = { id: "segment-0-0", text: "Bonjour tout le monde." };
+  const html = renderTranscriptSegmentContent(
+    segment,
+    "fr",
+    "Hello everyone.",
+    "",
+  );
+  assert.match(html, /transcript-original/);
+  assert.match(html, /Bonjour tout le monde/);
+  assert.match(html, /Hello everyone/);
+});
+
+test("French captions translate into English using the French rules prompt section", async () => {
+  const requests = [];
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      if (url.startsWith("chrome-extension://")) {
+        return { ok: true, text: async () => read("prompts/translation.md") };
+      }
+      requests.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: '{"segments":[{"id":"segment-0-0","text":"Hello everyone."}]}',
+            },
+          }],
+        }),
+      };
+    },
+  });
+
+  const result = await helpers.handleTranslateContent(
+    { segments: [{ id: "segment-0-0", text: "Bonjour tout le monde." }] },
+    "transcriptBatch",
+    "en",
+    "Video",
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.translatedContent.segments[0].text, "Hello everyone.");
+  assert.match(requests[0].messages[0].content, /into English/);
+  assert.match(requests[0].messages[0].content, /tu\/vous/);
+});
+
+test("French rules prompt section describes translating into natural English", () => {
+  const prompt = read("prompts/translation.md");
+  assert.match(prompt, /## French rules/);
+  assert.match(prompt, /source text is French/);
+  assert.match(prompt, /tu\/vous/);
+  assert.match(prompt, /false friends/);
 });
 
 test("all AI product requests use DeepSeek non-thinking and JSON behavior", async () => {
