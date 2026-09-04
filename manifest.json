@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Digest",
+  "name": "YouTube Lingo",
   "version": "1.2.0",
   "minimum_chrome_version": "116",
   "description": "Turn YouTube videos into learning resources with transcripts, bilingual translation, AI overviews, and notes.",
@@ -11,7 +11,7 @@
     "https://api.deepseek.com/*"
   ],
   "action": {
-    "default_title": "Open YouTube Digest",
+    "default_title": "Open YouTube Lingo",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

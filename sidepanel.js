@@ -1,7 +1,7 @@
 /**
  * SIDE PANEL LOGIC
  *
- * Handles the UI for YouTube Digest: video detection, transcript analysis,
+ * Handles the UI for YouTube Lingo: video detection, transcript analysis,
  * rendering results, and export features.
  */
 
@@ -688,7 +688,7 @@ async function startDigest(videoId, videoUrl) {
     if (transcriptResult.error === "NO_SUPADATA_KEY") {
       showError(
         "API key missing",
-        "Add your Supadata API key in YouTube Digest Settings.",
+        "Add your Supadata API key in YouTube Lingo Settings.",
       );
       return;
     }
@@ -1396,7 +1396,7 @@ function exportTranscript() {
 
   exportText += `TRANSCRIPT:\n\n${transcriptContent}\n`;
   exportText += `\n${"—".repeat(60)}\n`;
-  exportText += `Exported by YouTube Digest\n`;
+  exportText += `Exported by YouTube Lingo\n`;
 
   const filename = `${sanitizeFilename(currentVideoTitle)}-transcript.txt`;
   downloadTextFile(exportText, filename);
@@ -1453,7 +1453,7 @@ function showConfigError(configStatus) {
   showState("error");
   document.getElementById("errorTitle").textContent = "API Keys Missing";
   document.getElementById("errorMessage").textContent =
-    `Add your ${missingKeys.join(" and ")} API key${missingKeys.length === 1 ? "" : "s"} in YouTube Digest Settings.`;
+    `Add your ${missingKeys.join(" and ")} API key${missingKeys.length === 1 ? "" : "s"} in YouTube Lingo Settings.`;
   document.getElementById("errorBtn").textContent = "Open Settings";
   errorAction = () => chrome.runtime.sendMessage({ action: "openOptions" });
 }
@@ -1844,7 +1844,7 @@ function buildVocabularyMarkdown(entries, scopeLabel) {
     md += `- **Timestamp:** ${entry.timestamp}\n`;
     md += `- **Saved:** ${formatExportDateTime(entry.dateSaved)}\n\n`;
   });
-  md += `Exported by YouTube Digest\n`;
+  md += `Exported by YouTube Lingo\n`;
   return md;
 }
 
@@ -1858,7 +1858,7 @@ function buildNotesMarkdown(entries, scopeLabel) {
     md += `- **Video:** [${mdInline(note.videoTitle) || "Unknown"}](${note.timestampedUrl})\n`;
     md += `- **Saved:** ${formatExportDateTime(note.createdAt)}\n\n`;
   });
-  md += `Exported by YouTube Digest\n`;
+  md += `Exported by YouTube Lingo\n`;
   return md;
 }
 
