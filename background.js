@@ -416,6 +416,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "saveVocabulary") {
+    // Ask DeepSeek for a word/phrase-level meaning, then save the entry.
+    handleSaveVocabulary(
+      message.videoId,
+      message.timestamp,
+      message.videoTitle,
+      message.channelName,
+      message.selectedText,
+      message.transcriptContext,
+    )
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "getVocabulary") {
+    // Get all saved vocabulary entries
+    handleGetVocabulary(message.videoId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "deleteVocabulary") {
+    // Delete a specific vocabulary entry
+    handleDeleteVocabulary(message.entryId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === "getVideoInfo") {
     handleGetVideoInfo(message.tabId)
       .then(sendResponse)
@@ -1439,6 +1470,175 @@ async function handleDeleteNote(noteId) {
     let notes = result.ytd_notes || [];
     notes = notes.filter((n) => n.id !== noteId);
     await chrome.storage.local.set({ ytd_notes: notes });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================
+// VOCABULARY
+// ============================================================
+
+/**
+ * Asks DeepSeek for a word/phrase-level meaning plus a cleaned context
+ * sentence, then saves a vocabulary entry to chrome.storage.local.
+ * Works for any source language — the prompt asks for an English meaning
+ * when the selection isn't already English, with no per-language logic here.
+ */
+async function handleSaveVocabulary(
+  videoId,
+  timestamp,
+  videoTitle,
+  channelName,
+  selectedText,
+  transcriptContext,
+) {
+  try {
+    const settings = await getSettings();
+    if (!settings.aiApiKey) {
+      return {
+        success: false,
+        error: "NO_AI_KEY",
+        message: "DeepSeek API key not configured.",
+      };
+    }
+
+    const word =
+      typeof selectedText === "string"
+        ? selectedText.replace(/\s+/g, " ").trim().slice(0, 500)
+        : "";
+    if (!word) {
+      return { success: false, error: "No text selected" };
+    }
+
+    const variables = {
+      videoTitle: videoTitle || "Unknown",
+      selectedText: word,
+      transcriptContext: transcriptContext || "None",
+    };
+    const systemPrompt = await loadPromptSection(
+      "vocabulary.md",
+      "System prompt",
+      variables,
+    );
+    const userPrompt = await loadPromptSection(
+      "vocabulary.md",
+      "User prompt",
+      variables,
+    );
+
+    debugLog("[YouTube Digest] Requesting vocabulary meaning");
+    const { text: resultText } = await requestAiCompletion({
+      maxTokens: 400,
+      responseFormat: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    });
+
+    let meaning = "";
+    let contextSentence = transcriptContext || "";
+    try {
+      const parsed = parseLooseJson(resultText.trim());
+      if (typeof parsed.meaning === "string") meaning = parsed.meaning.trim();
+      if (typeof parsed.sentence === "string" && parsed.sentence.trim()) {
+        contextSentence = parsed.sentence.trim();
+      }
+    } catch (parseError) {
+      console.warn(
+        "[YouTube Digest] JSON parse failed for vocabulary entry:",
+        parseError,
+      );
+      meaning = resultText.trim();
+    }
+
+    if (!meaning) {
+      return {
+        success: false,
+        error: "Could not generate a meaning for the selected text.",
+      };
+    }
+
+    const canonicalVideoUrl = YTD_SETTINGS.canonicalYouTubeUrl(videoId);
+    const safeTimestamp = Math.max(0, Math.floor(Number(timestamp) || 0));
+    const minutes = Math.floor(safeTimestamp / 60);
+    const seconds = safeTimestamp % 60;
+
+    const entry = {
+      id: `vocab_${Date.now()}`,
+      videoId,
+      videoTitle:
+        typeof videoTitle === "string"
+          ? videoTitle.slice(0, 500)
+          : "Untitled Video",
+      channelName:
+        typeof channelName === "string" ? channelName.slice(0, 300) : "",
+      word,
+      meaning: meaning.slice(0, 1000),
+      contextSentence: contextSentence.slice(0, 1000),
+      timestamp: `${minutes}:${String(seconds).padStart(2, "0")}`,
+      timestampSeconds: safeTimestamp,
+      videoUrl: `${canonicalVideoUrl}&t=${safeTimestamp}s`,
+      dateSaved: Date.now(),
+    };
+
+    await saveVocabularyToStorage(entry);
+    chrome.runtime
+      .sendMessage({ action: "vocabularySaved", entry })
+      .catch(() => {});
+
+    return { success: true, entry };
+  } catch (error) {
+    console.error("[YouTube Digest] Save vocabulary error:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Saves a vocabulary entry to chrome.storage.local
+ */
+async function saveVocabularyToStorage(entry) {
+  const result = await chrome.storage.local.get("ytd_vocabulary");
+  const entries = result.ytd_vocabulary || [];
+  entries.unshift(entry); // Add to beginning (newest first)
+
+  // Keep only last 100 entries to prevent storage bloat
+  if (entries.length > 100) {
+    entries.splice(100);
+  }
+
+  await chrome.storage.local.set({ ytd_vocabulary: entries });
+}
+
+/**
+ * Gets vocabulary entries from storage, optionally filtered by video ID
+ */
+async function handleGetVocabulary(videoId) {
+  try {
+    const result = await chrome.storage.local.get("ytd_vocabulary");
+    let entries = result.ytd_vocabulary || [];
+
+    if (videoId) {
+      entries = entries.filter((e) => e.videoId === videoId);
+    }
+
+    return { success: true, entries };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Deletes a vocabulary entry by ID
+ */
+async function handleDeleteVocabulary(entryId) {
+  try {
+    const result = await chrome.storage.local.get("ytd_vocabulary");
+    let entries = result.ytd_vocabulary || [];
+    entries = entries.filter((e) => e.id !== entryId);
+    await chrome.storage.local.set({ ytd_vocabulary: entries });
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

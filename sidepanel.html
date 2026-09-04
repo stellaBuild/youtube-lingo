@@ -72,6 +72,7 @@
         <button class="tab active" data-tab="transcript">Transcript</button>
         <button class="tab" data-tab="overview">Overview</button>
         <button class="tab" data-tab="notes">Notes</button>
+        <button class="tab" data-tab="vocabulary">Vocabulary</button>
       </div>
     </div>
 
@@ -254,6 +255,20 @@
               timestamped note, or press the "n" key while the video is focused.
             </p>
             <div id="notesList"></div>
+          </div>
+        </div>
+
+        <!-- TAB: Vocabulary -->
+        <div class="tab-panel" data-panel="vocabulary">
+          <div class="section">
+            <div class="section-header">
+              <div class="section-title">Vocabulary Notebook</div>
+            </div>
+            <p class="notes-intro" id="vocabularyIntro">
+              Select a word or phrase in the transcript and click Vocabulary
+              to save its meaning, sentence, and timestamp here.
+            </p>
+            <div id="vocabularyList"></div>
           </div>
         </div>
       </div>

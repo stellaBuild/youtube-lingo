@@ -45,6 +45,7 @@ let interfaceTranslationInFlight = new Set();
 let interfaceTranslationFailures = new Set();
 let currentNotes = [];
 let currentNotesFilterVideoId = null;
+let currentVocabulary = [];
 const TRANSLATION_MESSAGE_TIMEOUT_MS = 130_000;
 const TRANSLATION_BATCH_SIZE = 3;
 
@@ -290,6 +291,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .getElementById("notesFilterAll")
       ?.classList.contains("active");
     loadNotes(filterAll ? null : currentVideoId);
+    sendResponse({ success: true });
+  }
+  if (message.action === "vocabularySaved") {
+    // Refresh vocabulary list when a new entry is saved
+    loadVocabulary();
     sendResponse({ success: true });
   }
   return false;
@@ -638,6 +644,7 @@ async function startDigest(videoId, videoUrl) {
 
     // Load notes for this video
     loadNotes(videoId);
+    loadVocabulary();
 
     // Setup explain feature
     setupExplainFeature();
@@ -697,6 +704,7 @@ async function startDigest(videoId, videoUrl) {
 
   // Load notes for this video
   loadNotes(videoId);
+  loadVocabulary();
 
   // Setup explain feature for text selection
   setupExplainFeature();
@@ -1489,6 +1497,17 @@ function switchTab(tabName) {
     });
   }
 
+  // Same reasoning as Notes above: vocabulary entries are stored newest first.
+  if (tabName === "vocabulary") {
+    requestAnimationFrame(() => {
+      const contentArea = document.getElementById("contentArea");
+      const vocabPanelIsActive = document.querySelector(
+        '.tab-panel[data-panel="vocabulary"].active',
+      );
+      if (contentArea && vocabPanelIsActive) contentArea.scrollTop = 0;
+    });
+  }
+
   // Translate only the visible tab. This prevents hidden surfaces from using
   // tokens or competing with the batch queue the user is waiting for.
   if (tabName === "overview") {
@@ -1745,6 +1764,7 @@ function setupExplainFeature() {
   tooltip.innerHTML = `
     <button class="explain-btn" type="button">Explain</button>
     <button class="selection-note-btn" type="button">Note</button>
+    <button class="selection-vocab-btn" type="button">Vocabulary</button>
   `;
   tooltip.style.display = "none";
   document.body.appendChild(tooltip);
@@ -1866,6 +1886,53 @@ function setupExplainFeature() {
         }, 900);
       } catch (error) {
         console.error("[YouTube Digest] Save selected note error:", error);
+        button.textContent = "Error";
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.disabled = false;
+        }, 1500);
+      }
+    });
+
+  // Save the selected word/phrase to the vocabulary notebook: asks DeepSeek
+  // for a short standalone meaning plus the cleaned context sentence.
+  tooltip
+    .querySelector(".selection-vocab-btn")
+    .addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!selectedText || !currentVideoId) return;
+
+      const button = event.currentTarget;
+      const originalText = button.textContent;
+      button.textContent = "Saving...";
+      button.disabled = true;
+
+      try {
+        const transcriptContext = getTranscriptContext(selectedText);
+        const result = await chrome.runtime.sendMessage({
+          action: "saveVocabulary",
+          videoId: currentVideoId,
+          timestamp: selectedTimestamp,
+          videoTitle: currentVideoTitle,
+          channelName: currentChannelName,
+          selectedText,
+          transcriptContext,
+        });
+
+        if (!result?.success) {
+          throw new Error(result?.error || "Could not save vocabulary entry");
+        }
+
+        button.textContent = "Saved";
+        loadVocabulary();
+        setTimeout(() => {
+          tooltip.style.display = "none";
+          button.textContent = originalText;
+          button.disabled = false;
+        }, 900);
+      } catch (error) {
+        console.error("[YouTube Digest] Save vocabulary error:", error);
         button.textContent = "Error";
         setTimeout(() => {
           button.textContent = originalText;
@@ -2226,6 +2293,114 @@ async function deleteNote(noteId) {
     });
   } catch (error) {
     console.error("[YouTube Digest Panel] Delete note error:", error);
+  }
+}
+
+// ============================================================
+// VOCABULARY
+// ============================================================
+
+/**
+ * Loads and renders all saved vocabulary entries (most recent first).
+ */
+async function loadVocabulary() {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "getVocabulary",
+    });
+
+    if (result.success) {
+      currentVocabulary = result.entries || [];
+      renderVocabulary(currentVocabulary);
+    }
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Load vocabulary error:", error);
+  }
+}
+
+/**
+ * Renders the vocabulary list in the Vocabulary tab. Reuses the Notes card
+ * shell (.note-item/.note-header/.note-timestamp/.note-video-title/
+ * .note-delete) for the timestamp + video title + delete row.
+ */
+function renderVocabulary(entries) {
+  const vocabList = document.getElementById("vocabularyList");
+  const vocabIntro = document.getElementById("vocabularyIntro");
+
+  if (!vocabList) return;
+
+  vocabList.innerHTML = "";
+
+  if (!entries || entries.length === 0) {
+    vocabIntro.style.display = "block";
+    return;
+  }
+
+  vocabIntro.style.display = "none";
+
+  entries.forEach((entry) => {
+    const itemEl = document.createElement("div");
+    itemEl.className = "note-item";
+    itemEl.innerHTML = `
+      <div class="note-header">
+        <span class="note-timestamp" data-seconds="${Number(entry.timestampSeconds) || 0}">${escapeHtml(entry.timestamp)}</span>
+        <span class="note-video-title">${escapeHtml(entry.videoTitle)}</span>
+        <button class="note-delete" data-id="${escapeHtml(entry.id)}" type="button" aria-label="Delete vocabulary entry" title="Delete vocabulary entry">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 6h18"></path>
+            <path d="M8 6V4h8v2"></path>
+            <path d="m19 6-1 14H6L5 6"></path>
+            <path d="M10 11v5"></path>
+            <path d="M14 11v5"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="vocab-word">${escapeHtml(entry.word)}</div>
+      <div class="vocab-meaning">${escapeHtml(entry.meaning)}</div>
+      <div class="vocab-sentence">${escapeHtml(entry.contextSentence)}</div>
+    `;
+
+    // Timestamp click - play from this point (in this tab or a new one)
+    itemEl.querySelector(".note-timestamp").addEventListener("click", () => {
+      playVocabularyEntry(entry);
+    });
+
+    // Delete button
+    itemEl
+      .querySelector(".note-delete")
+      .addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await deleteVocabularyEntry(entry.id);
+        loadVocabulary();
+      });
+
+    vocabList.appendChild(itemEl);
+  });
+}
+
+/**
+ * Jumps to a vocabulary entry's saved timestamp (in this tab if it's the
+ * current video, else a new tab) — same behavior as playNote().
+ */
+function playVocabularyEntry(entry) {
+  if (entry.videoId && entry.videoId === currentVideoId) {
+    seekTo(entry.timestampSeconds);
+  } else {
+    chrome.tabs.create({ url: entry.videoUrl });
+  }
+}
+
+/**
+ * Deletes a vocabulary entry by ID.
+ */
+async function deleteVocabularyEntry(entryId) {
+  try {
+    await chrome.runtime.sendMessage({
+      action: "deleteVocabulary",
+      entryId: entryId,
+    });
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Delete vocabulary error:", error);
   }
 }
 
